@@ -2,9 +2,9 @@
 
 '''Script to blocking IP in nftables by country and black lists'''
 
-__author__ = "Tomasz Cebula <tomasz.cebula@gmail.com>"
+__author__ = "Tomasz Cebula <tomasz.cebula@gmail.com> P.S. modified"
 __license__ = "MIT"
-__version__ = "1.1.0"
+__version__ = "1.3.1"
 
 import argparse
 from sys import stderr
@@ -15,6 +15,8 @@ import ssl
 from subprocess import run
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from yaml import safe_load
+import ipaddress
+import typing
 
 desc = 'Script to blocking IP in nftables by country and black lists'
 parser = argparse.ArgumentParser(description=desc)
@@ -132,7 +134,33 @@ def start():
     run(['nft', '-f', '-'], input=nft_conf.encode(), check=True)
 
 
-def get_urls(urls, do_filter=False):
+# based on: https://gist.github.com/hirusha-adi/8ee951a228e11b8b2af44ebf94e3b317
+def is_ipvalid(
+    value: str,
+    check_type: typing.Literal[
+        "addr",
+        "network",
+        "ipv4",
+        "ipv4netork",
+        "ipv6",
+        "ipv6network",
+    ],
+) -> bool:     
+    try:
+        {
+            "addr": ipaddress.ip_address,               # https://docs.python.org/3/library/ipaddress.html#ipaddress.ip_address
+            "network": ipaddress.ip_network,            # https://docs.python.org/3/library/ipaddress.html#ipaddress.ip_network
+            "ipv4": ipaddress.IPv4Address,              # https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv4Address
+            "ipv4network": ipaddress.IPv4Network,       # https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv4Network
+            "ipv6": ipaddress.IPv6Address,              # https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address
+            "ipv6network": ipaddress.IPv6Network,       # https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Network
+        }[check_type](value)
+        return True
+    except (ValueError, KeyError):
+        return False
+
+
+def get_urls(urls, ip_ver, do_filter=False):
     '''Download url in threads'''
     ip_list_aggregated = []
     def get_url(url):
@@ -151,7 +179,24 @@ def get_urls(urls, do_filter=False):
         do_urls = [executor.submit(get_url, url) for url in urls]
         for out in as_completed(do_urls):
             ip_list = out.result()
-            ip_list_aggregated += ip_list
+            ipv4_list = []
+            ipv6_list = []
+            for ip in ip_list:
+                if ip_ver == 'v4' and is_ipvalid(ip, "ipv4"):
+                  ipv4_list.append(ip)
+                elif ip_ver == 'v4' and is_ipvalid(ip, "ipv4network"):
+                  ipv4_list.append(ip)
+                elif ip_ver == 'v6' and is_ipvalid(ip,"ipv6"):
+                  ipv6_list.append(ip)
+                elif ip_ver == 'v6' and is_ipvalid(ip,"ipv6network"):
+                  ipv6_list.append(ip)
+                #else:
+                #  print('ERROR IP is invalid', ip)
+            ip_list_aggregated += ipv4_list if ip_ver == "v4" else ipv6_list
+            print('ipv4: ', len(ipv4_list))
+            print('ipv6: ', len(ipv6_list))
+            print('all: ', len(ip_list))
+            print(ip_ver, ' aggregated: ', len(ip_list_aggregated))
     return ip_list_aggregated
 
 
@@ -160,7 +205,7 @@ def get_blacklist(ip_ver):
     urls = []
     for bl_url in BLACKLIST[ip_ver]:
         urls.append(bl_url)
-    ips = get_urls(urls, do_filter=True)
+    ips = get_urls(urls, ip_ver, do_filter=True)
     return ips
 
 
@@ -170,7 +215,7 @@ def get_country_ip_list(ip_ver):
     for country in COUNTRY_LIST:
         url = f'https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ip{ip_ver}/{country.lower()}.cidr'
         urls.append(url)
-    ips = get_urls(urls)
+    ips = get_urls(urls, ip_ver)
     return ips
 
 
@@ -183,7 +228,7 @@ def get_country_ip_list2(ip_ver):
         elif ip_ver == 'v6':
             url = f'http://ipdeny.com/ipv6/ipaddresses/aggregated/{country.lower()}-aggregated.zone'
         urls.append(url)
-    ips = get_urls(urls)
+    ips = get_urls(urls, ip_ver)
     return ips
 
 
